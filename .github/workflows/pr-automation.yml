@@ -162,15 +162,9 @@ ${JSON.stringify(coverageData, null, 2)}
 
       - name: Run TruffleHog secret scanning
         id: trufflehog
-        uses: trufflesecurity/trufflehog@main
-        with:
-          extra_args: --only-verified
-        continue-on-error: true
-
-      - name: Capture TruffleHog output
-        id: trufflehog-output
         run: |
-          echo "TRUFFLEHOG_OUTPUT=$(cat /tmp/trufflehog.log 2>/dev/null || echo 'No secrets found')" >> $GITHUB_OUTPUT
+          docker run --rm -v "$PWD:/workdir" trufflesecurity/trufflehog:latest git file:///workdir --only-verified --json 2>/dev/null | head -1000 > trufflehog-output.json || true
+          echo "TRUFFLEHOG_JSON=$(cat trufflehog-output.json 2>/dev/null | head -1000)" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Post Security Scan Report
@@ -188,7 +182,16 @@ ${JSON.stringify(coverageData, null, 2)}
             } catch {
               auditResult = auditRaw || 'Could not parse audit output';
             }
-            const trufflehogOutput = '${{ steps.trufflehog-output.outputs.TRUFFLEHOG_OUTPUT }}' || 'No secrets found';
+            const trufflehogRaw = '${{ steps.trufflehog.outputs.TRUFFLEHOG_JSON }}';
+            let trufflehogResult = 'No secrets found';
+            try {
+              const findings = JSON.parse(`[${trufflehogRaw.replace(/\n/g, ',')}]`);
+              if (findings.length > 0) {
+                trufflehogResult = `Found ${findings.length} potential secret(s)`;
+              }
+            } catch {
+              trufflehogResult = trufflehogRaw || 'No secrets found';
+            }
             const body = `
 ### Security Scan Report
 
@@ -196,7 +199,7 @@ ${JSON.stringify(coverageData, null, 2)}
 ${auditResult}
 
 #### Secret Scanning
-${trufflehogOutput}
+${trufflehogResult}
 
 `;
             await github.rest.issues.createComment({
