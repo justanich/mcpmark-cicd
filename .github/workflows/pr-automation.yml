@@ -156,23 +156,28 @@ ${JSON.stringify(coverageData, null, 2)}
       - name: Run npm audit
         id: npm-audit
         run: |
-          echo "AUDIT_OUTPUT=$(npm audit --json 2>&1 | head -2000)" >> $GITHUB_OUTPUT
+          npm audit --json > audit-report.json 2>&1 || true
+          echo "AUDIT_JSON=$(cat audit-report.json | head -2000)" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      - name: Run secret scanning with Gitleaks
-        id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - name: Run TruffleHog secret scanning
+        id: trufflehog
+        uses: trufflesecurity/trufflehog@main
         with:
-          config-path: .gitleaks.toml
-          no-git: false
-          redact: true
+          extra_args: --only-verified
+        continue-on-error: true
+
+      - name: Capture TruffleHog output
+        id: trufflehog-output
+        run: |
+          echo "TRUFFLEHOG_OUTPUT=$(cat /tmp/trufflehog.log 2>/dev/null || echo 'No secrets found')" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Post Security Scan Report
         uses: actions/github-script@v7
         with:
           script: |
-            const auditRaw = '${{ steps.npm-audit.outputs.AUDIT_OUTPUT }}';
+            const auditRaw = '${{ steps.npm-audit.outputs.AUDIT_JSON }}';
             let auditResult = 'No vulnerabilities found';
             try {
               const auditJson = JSON.parse(auditRaw);
@@ -183,7 +188,7 @@ ${JSON.stringify(coverageData, null, 2)}
             } catch {
               auditResult = auditRaw || 'Could not parse audit output';
             }
-            const gitleaksResult = '${{ steps.gitleaks.outputs.GITLEAKS_RESULT }}' || 'No secrets found';
+            const trufflehogOutput = '${{ steps.trufflehog-output.outputs.TRUFFLEHOG_OUTPUT }}' || 'No secrets found';
             const body = `
 ### Security Scan Report
 
@@ -191,7 +196,7 @@ ${JSON.stringify(coverageData, null, 2)}
 ${auditResult}
 
 #### Secret Scanning
-${gitleaksResult}
+${trufflehogOutput}
 
 `;
             await github.rest.issues.createComment({
